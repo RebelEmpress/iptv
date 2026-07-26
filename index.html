@@ -159,11 +159,12 @@
     #loading {
       position: absolute;
       font-size: 15px;
-      color: #888899;
-      background: rgba(0,0,0,0.8);
+      color: #ffffff;
+      background: rgba(0,0,0,0.85);
       padding: 12px 24px;
       border-radius: 20px;
       pointer-events: none;
+      display: block;
     }
   </style>
 </head>
@@ -342,10 +343,13 @@
       }
     }
 
-    // Stream playback logic
+    // Optimized Stream Playback Logic
     function playStream(url, element) {
       document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
       if (element) element.classList.add('active');
+
+      loading.innerText = 'Connecting to stream...';
+      loading.style.display = 'block';
 
       const targetStreamUrl = PROXY_BASE + encodeURIComponent(url);
 
@@ -353,6 +357,18 @@
         if (hls) hls.destroy();
 
         hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+          maxBufferLength: 15,
+          maxMaxBufferLength: 30,
+          maxBufferHole: 0.5,
+          highBufferWatchdogPeriod: 2,
+          nudgeMaxRetry: 5,
+          manifestLoadingTimeOut: 10000,
+          manifestLoadingMaxRetry: 3,
+          levelLoadingTimeOut: 10000,
+          fragLoadingTimeOut: 10000,
           xhrSetup: function (xhr, reqUrl) {
             if (!reqUrl.startsWith(PROXY_BASE)) {
               xhr.open('GET', PROXY_BASE + encodeURIComponent(reqUrl), true);
@@ -364,17 +380,33 @@
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          loading.style.display = 'none';
           video.play().catch(e => console.log('Autoplay blocked:', e));
         });
 
         hls.on(Hls.Events.ERROR, function (event, data) {
           if (data.fatal) {
-            console.warn('Stream failed or offline:', data);
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.warn('Network error, attempting recovery...');
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                console.warn('Media error, attempting recovery...');
+                hls.recoverMediaError();
+                break;
+              default:
+                loading.innerText = 'Stream offline or unavailable';
+                loading.style.display = 'block';
+                hls.destroy();
+                break;
+            }
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = targetStreamUrl;
         video.play();
+        loading.style.display = 'none';
       }
     }
 
