@@ -22,7 +22,7 @@
     
     /* Sidebar Styling */
     #sidebar {
-      width: 350px;
+      width: 360px;
       background: #18181c;
       display: flex;
       flex-direction: column;
@@ -32,6 +32,9 @@
       padding: 15px;
       background: #1f1f24;
       border-bottom: 1px solid #282830;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
     #search-input {
       width: 100%;
@@ -47,6 +50,33 @@
     #search-input:focus {
       border-color: #007acc;
     }
+
+    /* Country Filter Tabs */
+    .tabs {
+      display: flex;
+      gap: 6px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 6px 0;
+      background: #282832;
+      border: none;
+      border-radius: 6px;
+      color: #aaa;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover {
+      background: #333342;
+      color: #fff;
+    }
+    .tab-btn.active {
+      background: #007acc;
+      color: #fff;
+    }
+
     #channel-list {
       flex: 1;
       overflow-y: auto;
@@ -69,7 +99,6 @@
       color: #fff;
     }
     
-    /* Clean Logo Container */
     .logo-container {
       width: 36px;
       height: 36px;
@@ -88,11 +117,16 @@
     }
     .channel-fallback {
       font-weight: bold;
-      font-size: 12px;
+      font-size: 11px;
       color: #888899;
       text-transform: uppercase;
     }
     
+    .channel-info {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
     .channel-title {
       font-size: 14px;
       font-weight: 500;
@@ -100,8 +134,13 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .channel-country {
+      font-size: 11px;
+      color: #777788;
+      margin-top: 2px;
+    }
 
-    /* Player Main Area */
+    /* Video Player Container */
     #player-container {
       flex: 1;
       display: flex;
@@ -124,6 +163,7 @@
       background: rgba(0,0,0,0.8);
       padding: 12px 24px;
       border-radius: 20px;
+      pointer-events: none;
     }
   </style>
 </head>
@@ -131,50 +171,66 @@
 
   <div id="sidebar">
     <div id="search-box">
-      <input type="text" id="search-input" placeholder="Search thousands of channels..." oninput="onSearchChange()" />
+      <input type="text" id="search-input" placeholder="Search channels..." oninput="filterChannels()" />
+      <div class="tabs">
+        <button class="tab-btn active" onclick="setCountryFilter('ALL', this)">ALL</button>
+        <button class="tab-btn" onclick="setCountryFilter('US', this)">🇺🇸 USA</button>
+        <button class="tab-btn" onclick="setCountryFilter('UK', this)">🇬🇧 UK</button>
+        <button class="tab-btn" onclick="setCountryFilter('JP', this)">🇯🇵 Japan</button>
+      </div>
     </div>
     <ul id="channel-list" onscroll="handleScroll()"></ul>
   </div>
 
   <div id="player-container">
-    <div id="loading">Loading playlist...</div>
+    <div id="loading">Loading USA, UK & Japan channels...</div>
     <video id="video" controls autoplay></video>
   </div>
 
   <script>
-    const PROXY = 'https://iptv-cors-proxy.minhqdr4n5.workers.dev/?url=';
-    const M3U_URL = 'https://iptv-org.github.io/iptv/index.m3u';
+    const PROXY_BASE = 'https://iptv-cors-proxy.minhqdr4n5.workers.dev/?url=';
+    
+    // Country-specific M3U sources
+    const PLAYLISTS = [
+      { code: 'US', name: 'USA', url: 'https://iptv-org.github.io/iptv/countries/us.m3u' },
+      { code: 'UK', name: 'UK', url: 'https://iptv-org.github.io/iptv/countries/uk.m3u' },
+      { code: 'JP', name: 'Japan', url: 'https://iptv-org.github.io/iptv/countries/jp.m3u' }
+    ];
     
     let allChannels = [];
     let currentFilteredChannels = [];
+    let selectedCountry = 'ALL';
     let displayedCount = 0;
-    const PAGE_SIZE = 100;
+    const PAGE_SIZE = 80;
 
     const video = document.getElementById('video');
     const loading = document.getElementById('loading');
     const channelListEl = document.getElementById('channel-list');
     let hls = null;
 
-    // Fetch and Parse M3U
-    async function loadPlaylist() {
+    // Fetch and combine country playlists
+    async function loadPlaylists() {
       try {
-        const proxiedM3uUrl = PROXY + encodeURIComponent(M3U_URL);
-        const response = await fetch(proxiedM3uUrl);
-        const data = await response.text();
-        allChannels = parseM3U(data);
-        currentFilteredChannels = allChannels;
-        loading.style.display = 'none';
+        const fetchPromises = PLAYLISTS.map(async (pl) => {
+          const proxiedUrl = PROXY_BASE + encodeURIComponent(pl.url);
+          const res = await fetch(proxiedUrl);
+          const text = await res.text();
+          return parseM3U(text, pl.code, pl.name);
+        });
+
+        const results = await Promise.all(fetchPromises);
+        allChannels = results.flat();
         
-        // Initial render
-        renderNextBatch(true);
+        loading.style.display = 'none';
+        filterChannels();
       } catch (error) {
-        loading.innerText = 'Failed to load playlist.';
+        loading.innerText = 'Failed to load channels.';
         console.error(error);
       }
     }
 
-    // Advanced M3U Parser (Cleans junk attributes & handles multi-line titles)
-    function parseM3U(m3uText) {
+    // Parse M3U
+    function parseM3U(m3uText, countryCode, countryName) {
       const lines = m3uText.split('\n');
       const parsedChannels = [];
       let currentChannel = null;
@@ -183,21 +239,18 @@
         let line = lines[i].trim();
 
         if (line.startsWith('#EXTINF:')) {
-          // Extract title after the last comma
           const commaIdx = line.lastIndexOf(',');
           let name = commaIdx !== -1 ? line.substring(commaIdx + 1).trim() : 'Unknown Channel';
           
-          // Clean up weird headers/user-agents injected into title lines
           if (name.includes('http-user-agent=')) {
             name = name.split('group-title=')[1] || name;
             name = name.replace(/^"[^"]*"/, '').replace(/^,[^,]*,/, '').trim();
           }
 
-          // Extract logo
           const logoMatch = line.match(/tvg-logo="([^"]+)"/);
           const logo = logoMatch ? logoMatch[1] : '';
 
-          currentChannel = { name, logo };
+          currentChannel = { name, logo, countryCode, countryName };
         } else if (line && !line.startsWith('#')) {
           if (currentChannel) {
             currentChannel.url = line;
@@ -209,7 +262,27 @@
       return parsedChannels;
     }
 
-    // Lazy load channels to keep browser ultra smooth
+    // Filter by Tab & Search Input
+    function setCountryFilter(code, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedCountry = code;
+      filterChannels();
+    }
+
+    function filterChannels() {
+      const query = document.getElementById('search-input').value.toLowerCase();
+      
+      currentFilteredChannels = allChannels.filter(ch => {
+        const matchesCountry = (selectedCountry === 'ALL') || (ch.countryCode === selectedCountry);
+        const matchesSearch = ch.name.toLowerCase().includes(query);
+        return matchesCountry && matchesSearch;
+      });
+
+      renderNextBatch(true);
+    }
+
+    // Lazy load channel list
     function renderNextBatch(reset = false) {
       if (reset) {
         channelListEl.innerHTML = '';
@@ -222,7 +295,6 @@
         const li = document.createElement('li');
         li.className = 'channel-item';
         
-        // Logo Container
         const logoDiv = document.createElement('div');
         logoDiv.className = 'logo-container';
         
@@ -231,19 +303,29 @@
           img.className = 'channel-logo';
           img.src = channel.logo;
           img.onerror = () => {
-            logoDiv.innerHTML = `<span class="channel-fallback">${channel.name.substring(0, 2)}</span>`;
+            logoDiv.innerHTML = `<span class="channel-fallback">${channel.countryCode}</span>`;
           };
           logoDiv.appendChild(img);
         } else {
-          logoDiv.innerHTML = `<span class="channel-fallback">${channel.name.substring(0, 2)}</span>`;
+          logoDiv.innerHTML = `<span class="channel-fallback">${channel.countryCode}</span>`;
         }
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'channel-info';
 
         const title = document.createElement('span');
         title.className = 'channel-title';
         title.innerText = channel.name;
 
+        const sub = document.createElement('span');
+        sub.className = 'channel-country';
+        sub.innerText = channel.countryName;
+
+        infoDiv.appendChild(title);
+        infoDiv.appendChild(sub);
+
         li.appendChild(logoDiv);
-        li.appendChild(title);
+        li.appendChild(infoDiv);
 
         li.onclick = () => playStream(channel.url, li);
         channelListEl.appendChild(li);
@@ -252,7 +334,6 @@
       displayedCount += nextBatch.length;
     }
 
-    // Scroll listener for Infinite Scrolling
     function handleScroll() {
       if (channelListEl.scrollTop + channelListEl.clientHeight >= channelListEl.scrollHeight - 200) {
         if (displayedCount < currentFilteredChannels.length) {
@@ -261,34 +342,43 @@
       }
     }
 
-    // Search Filter
-    function onSearchChange() {
-      const query = document.getElementById('search-input').value.toLowerCase();
-      currentFilteredChannels = allChannels.filter(ch => ch.name.toLowerCase().includes(query));
-      renderNextBatch(true);
-    }
-
-    // Stream Player
+    // Stream playback logic
     function playStream(url, element) {
       document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
       if (element) element.classList.add('active');
 
-      const proxiedStreamUrl = PROXY + encodeURIComponent(url);
+      const targetStreamUrl = PROXY_BASE + encodeURIComponent(url);
 
       if (Hls.isSupported()) {
         if (hls) hls.destroy();
-        hls = new Hls();
-        hls.loadSource(proxiedStreamUrl);
+
+        hls = new Hls({
+          xhrSetup: function (xhr, reqUrl) {
+            if (!reqUrl.startsWith(PROXY_BASE)) {
+              xhr.open('GET', PROXY_BASE + encodeURIComponent(reqUrl), true);
+            }
+          }
+        });
+
+        hls.loadSource(targetStreamUrl);
         hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(e => console.log('Autoplay blocked:', e));
+        });
+
+        hls.on(Hls.Events.ERROR, function (event, data) {
+          if (data.fatal) {
+            console.warn('Stream failed or offline:', data);
+          }
+        });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = proxiedStreamUrl;
+        video.src = targetStreamUrl;
         video.play();
       }
     }
 
-    // Initialize
-    loadPlaylist();
+    loadPlaylists();
   </script>
 </body>
 </html>
