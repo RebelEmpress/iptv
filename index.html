@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Pages IPTV Player</title>
+  <!-- HLS.js Library for HTTP Live Streaming -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #121212;
+      color: #ffffff;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    /* Sidebar Layout */
+    #sidebar {
+      width: 320px;
+      background: #1e1e1e;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #333;
+    }
+    #search-box {
+      padding: 15px;
+      background: #252525;
+      border-bottom: 1px solid #333;
+    }
+    #search-input {
+      width: 100%;
+      padding: 10px;
+      background: #121212;
+      border: 1px solid #444;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+    }
+    #channel-list {
+      flex: 1;
+      overflow-y: auto;
+      list-style: none;
+    }
+    .channel-item {
+      padding: 12px 15px;
+      border-bottom: 1px solid #2a2a2a;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      transition: background 0.2s;
+    }
+    .channel-item:hover {
+      background: #2a2a2a;
+    }
+    .channel-item.active {
+      background: #007acc;
+    }
+    .channel-logo {
+      width: 30px;
+      height: 30px;
+      object-fit: contain;
+      margin-right: 12px;
+      border-radius: 4px;
+      background: #000;
+    }
+
+    /* Player Main Area */
+    #player-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: #000;
+      position: relative;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      max-height: 100vh;
+      outline: none;
+    }
+    #loading {
+      position: absolute;
+      font-size: 16px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="sidebar">
+    <div id="search-box">
+      <input type="text" id="search-input" placeholder="Search channels..." oninput="filterChannels()" />
+    </div>
+    <ul id="channel-list"></ul>
+  </div>
+
+  <div id="player-container">
+    <div id="loading">Loading channel list...</div>
+    <video id="video" controls autoplay></video>
+  </div>
+
+  <script>
+    const M3U_URL = 'https://iptv-org.github.io/iptv/index.m3u';
+    let channels = [];
+    const video = document.getElementById('video');
+    const loading = document.getElementById('loading');
+    let hls = null;
+
+    // Fetch and Parse M3U
+    async function loadPlaylist() {
+      try {
+        const response = await fetch(M3U_URL);
+        const data = await response.text();
+        channels = parseM3U(data);
+        loading.style.display = 'none';
+        renderChannels(channels);
+      } catch (error) {
+        loading.innerText = 'Failed to load playlist.';
+        console.error(error);
+      }
+    }
+
+    // Basic M3U Parser
+    function parseM3U(m3uText) {
+      const lines = m3uText.split('\n');
+      const parsedChannels = [];
+      let currentChannel = null;
+
+      lines.forEach(line => {
+        line = line.trim();
+        if (line.startsWith('#EXTINF:')) {
+          const nameMatch = line.match(/,(.+)$/);
+          const logoMatch = line.match(/tvg-logo="([^"]+)"/);
+          
+          currentChannel = {
+            name: nameMatch ? nameMatch[1].trim() : 'Unknown Channel',
+            logo: logoMatch ? logoMatch[1] : ''
+          };
+        } else if (line && !line.startsWith('#')) {
+          if (currentChannel) {
+            currentChannel.url = line;
+            parsedChannels.push(currentChannel);
+            currentChannel = null;
+          }
+        }
+      });
+      return parsedChannels;
+    }
+
+    // Render Channel List in Sidebar
+    function renderChannels(list) {
+      const listContainer = document.getElementById('channel-list');
+      listContainer.innerHTML = '';
+      
+      // Limit DOM items for fluid scrolling performance
+      list.slice(0, 300).forEach((channel, index) => {
+        const li = document.createElement('li');
+        li.className = 'channel-item';
+        
+        const img = document.createElement('img');
+        img.className = 'channel-logo';
+        img.src = channel.logo || 'https://via.placeholder.com/30?text=TV';
+        img.onerror = () => { img.src = 'https://via.placeholder.com/30?text=TV'; };
+        
+        const title = document.createElement('span');
+        title.innerText = channel.name;
+
+        li.appendChild(img);
+        li.appendChild(title);
+
+        li.onclick = () => playStream(channel.url, li);
+        listContainer.appendChild(li);
+      });
+    }
+
+    // Stream Player Setup
+    function playStream(url, element) {
+      document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
+      if (element) element.classList.add('active');
+
+      if (Hls.isSupported()) {
+        if (hls) hls.destroy();
+        hls = new Hls();
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native Safari HLS Support
+        video.src = url;
+        video.play();
+      }
+    }
+
+    // Channel Search Filter
+    function filterChannels() {
+      const query = document.getElementById('search-input').value.toLowerCase();
+      const filtered = channels.filter(ch => ch.name.toLowerCase().includes(query));
+      renderChannels(filtered);
+    }
+
+    // Initialize
+    loadPlaylist();
+  </script>
+</body>
+</html>
