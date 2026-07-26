@@ -109,16 +109,20 @@
   </div>
 
   <script>
+    // Your Cloudflare Worker Proxy configuration
+    const PROXY = 'https://iptv-cors-proxy.minhqdr4n5.workers.dev/?url=';
     const M3U_URL = 'https://iptv-org.github.io/iptv/index.m3u';
+    
     let channels = [];
     const video = document.getElementById('video');
     const loading = document.getElementById('loading');
     let hls = null;
 
-    // Fetch and Parse M3U
+    // Fetch and Parse M3U via Proxy
     async function loadPlaylist() {
       try {
-        const response = await fetch(M3U_URL);
+        const proxiedM3uUrl = PROXY + encodeURIComponent(M3U_URL);
+        const response = await fetch(proxiedM3uUrl);
         const data = await response.text();
         channels = parseM3U(data);
         loading.style.display = 'none';
@@ -161,8 +165,8 @@
       const listContainer = document.getElementById('channel-list');
       listContainer.innerHTML = '';
       
-      // Limit DOM items for fluid scrolling performance
-      list.slice(0, 300).forEach((channel, index) => {
+      // Render first 300 items for fluid scrolling performance
+      list.slice(0, 300).forEach((channel) => {
         const li = document.createElement('li');
         li.className = 'channel-item';
         
@@ -182,20 +186,23 @@
       });
     }
 
-    // Stream Player Setup
+    // Stream Player Setup via Proxy
     function playStream(url, element) {
       document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
       if (element) element.classList.add('active');
 
+      // Append target URL to Worker Proxy
+      const proxiedStreamUrl = PROXY + encodeURIComponent(url);
+
       if (Hls.isSupported()) {
         if (hls) hls.destroy();
         hls = new Hls();
-        hls.loadSource(url);
+        hls.loadSource(proxiedStreamUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Native Safari HLS Support
-        video.src = url;
+        video.src = proxiedStreamUrl;
         video.play();
       }
     }
