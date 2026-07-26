@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>GitHub Pages IPTV Player</title>
-  <!-- HLS.js Library for HTTP Live Streaming -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     * {
@@ -14,34 +13,39 @@
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: #121212;
+      background-color: #0f0f12;
       color: #ffffff;
       display: flex;
       height: 100vh;
       overflow: hidden;
     }
     
-    /* Sidebar Layout */
+    /* Sidebar Styling */
     #sidebar {
-      width: 320px;
-      background: #1e1e1e;
+      width: 350px;
+      background: #18181c;
       display: flex;
       flex-direction: column;
-      border-right: 1px solid #333;
+      border-right: 1px solid #282830;
     }
     #search-box {
       padding: 15px;
-      background: #252525;
-      border-bottom: 1px solid #333;
+      background: #1f1f24;
+      border-bottom: 1px solid #282830;
     }
     #search-input {
       width: 100%;
-      padding: 10px;
-      background: #121212;
-      border: 1px solid #444;
-      border-radius: 6px;
+      padding: 10px 14px;
+      background: #0f0f12;
+      border: 1px solid #33333d;
+      border-radius: 8px;
       color: #fff;
       font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #search-input:focus {
+      border-color: #007acc;
     }
     #channel-list {
       flex: 1;
@@ -49,26 +53,52 @@
       list-style: none;
     }
     .channel-item {
-      padding: 12px 15px;
-      border-bottom: 1px solid #2a2a2a;
+      padding: 12px 16px;
+      border-bottom: 1px solid #22222a;
       cursor: pointer;
       display: flex;
       align-items: center;
-      transition: background 0.2s;
+      gap: 12px;
+      transition: background 0.15s ease;
     }
     .channel-item:hover {
-      background: #2a2a2a;
+      background: #252530;
     }
     .channel-item.active {
       background: #007acc;
+      color: #fff;
+    }
+    
+    /* Clean Logo Container */
+    .logo-container {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: #282832;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      flex-shrink: 0;
     }
     .channel-logo {
-      width: 30px;
-      height: 30px;
+      width: 100%;
+      height: 100%;
       object-fit: contain;
-      margin-right: 12px;
-      border-radius: 4px;
-      background: #000;
+    }
+    .channel-fallback {
+      font-weight: bold;
+      font-size: 12px;
+      color: #888899;
+      text-transform: uppercase;
+    }
+    
+    .channel-title {
+      font-size: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     /* Player Main Area */
@@ -89,8 +119,11 @@
     }
     #loading {
       position: absolute;
-      font-size: 16px;
-      color: #aaa;
+      font-size: 15px;
+      color: #888899;
+      background: rgba(0,0,0,0.8);
+      padding: 12px 24px;
+      border-radius: 20px;
     }
   </style>
 </head>
@@ -98,57 +131,73 @@
 
   <div id="sidebar">
     <div id="search-box">
-      <input type="text" id="search-input" placeholder="Search channels..." oninput="filterChannels()" />
+      <input type="text" id="search-input" placeholder="Search thousands of channels..." oninput="onSearchChange()" />
     </div>
-    <ul id="channel-list"></ul>
+    <ul id="channel-list" onscroll="handleScroll()"></ul>
   </div>
 
   <div id="player-container">
-    <div id="loading">Loading channel list...</div>
+    <div id="loading">Loading playlist...</div>
     <video id="video" controls autoplay></video>
   </div>
 
   <script>
-    // Your Cloudflare Worker Proxy configuration
     const PROXY = 'https://iptv-cors-proxy.minhqdr4n5.workers.dev/?url=';
     const M3U_URL = 'https://iptv-org.github.io/iptv/index.m3u';
     
-    let channels = [];
+    let allChannels = [];
+    let currentFilteredChannels = [];
+    let displayedCount = 0;
+    const PAGE_SIZE = 100;
+
     const video = document.getElementById('video');
     const loading = document.getElementById('loading');
+    const channelListEl = document.getElementById('channel-list');
     let hls = null;
 
-    // Fetch and Parse M3U via Proxy
+    // Fetch and Parse M3U
     async function loadPlaylist() {
       try {
         const proxiedM3uUrl = PROXY + encodeURIComponent(M3U_URL);
         const response = await fetch(proxiedM3uUrl);
         const data = await response.text();
-        channels = parseM3U(data);
+        allChannels = parseM3U(data);
+        currentFilteredChannels = allChannels;
         loading.style.display = 'none';
-        renderChannels(channels);
+        
+        // Initial render
+        renderNextBatch(true);
       } catch (error) {
         loading.innerText = 'Failed to load playlist.';
         console.error(error);
       }
     }
 
-    // Basic M3U Parser
+    // Advanced M3U Parser (Cleans junk attributes & handles multi-line titles)
     function parseM3U(m3uText) {
       const lines = m3uText.split('\n');
       const parsedChannels = [];
       let currentChannel = null;
 
-      lines.forEach(line => {
-        line = line.trim();
+      for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+
         if (line.startsWith('#EXTINF:')) {
-          const nameMatch = line.match(/,(.+)$/);
-          const logoMatch = line.match(/tvg-logo="([^"]+)"/);
+          // Extract title after the last comma
+          const commaIdx = line.lastIndexOf(',');
+          let name = commaIdx !== -1 ? line.substring(commaIdx + 1).trim() : 'Unknown Channel';
           
-          currentChannel = {
-            name: nameMatch ? nameMatch[1].trim() : 'Unknown Channel',
-            logo: logoMatch ? logoMatch[1] : ''
-          };
+          // Clean up weird headers/user-agents injected into title lines
+          if (name.includes('http-user-agent=')) {
+            name = name.split('group-title=')[1] || name;
+            name = name.replace(/^"[^"]*"/, '').replace(/^,[^,]*,/, '').trim();
+          }
+
+          // Extract logo
+          const logoMatch = line.match(/tvg-logo="([^"]+)"/);
+          const logo = logoMatch ? logoMatch[1] : '';
+
+          currentChannel = { name, logo };
         } else if (line && !line.startsWith('#')) {
           if (currentChannel) {
             currentChannel.url = line;
@@ -156,42 +205,74 @@
             currentChannel = null;
           }
         }
-      });
+      }
       return parsedChannels;
     }
 
-    // Render Channel List in Sidebar
-    function renderChannels(list) {
-      const listContainer = document.getElementById('channel-list');
-      listContainer.innerHTML = '';
-      
-      // Render first 300 items for fluid scrolling performance
-      list.slice(0, 300).forEach((channel) => {
+    // Lazy load channels to keep browser ultra smooth
+    function renderNextBatch(reset = false) {
+      if (reset) {
+        channelListEl.innerHTML = '';
+        displayedCount = 0;
+      }
+
+      const nextBatch = currentFilteredChannels.slice(displayedCount, displayedCount + PAGE_SIZE);
+
+      nextBatch.forEach((channel) => {
         const li = document.createElement('li');
         li.className = 'channel-item';
         
-        const img = document.createElement('img');
-        img.className = 'channel-logo';
-        img.src = channel.logo || 'https://via.placeholder.com/30?text=TV';
-        img.onerror = () => { img.src = 'https://via.placeholder.com/30?text=TV'; };
+        // Logo Container
+        const logoDiv = document.createElement('div');
+        logoDiv.className = 'logo-container';
         
+        if (channel.logo) {
+          const img = document.createElement('img');
+          img.className = 'channel-logo';
+          img.src = channel.logo;
+          img.onerror = () => {
+            logoDiv.innerHTML = `<span class="channel-fallback">${channel.name.substring(0, 2)}</span>`;
+          };
+          logoDiv.appendChild(img);
+        } else {
+          logoDiv.innerHTML = `<span class="channel-fallback">${channel.name.substring(0, 2)}</span>`;
+        }
+
         const title = document.createElement('span');
+        title.className = 'channel-title';
         title.innerText = channel.name;
 
-        li.appendChild(img);
+        li.appendChild(logoDiv);
         li.appendChild(title);
 
         li.onclick = () => playStream(channel.url, li);
-        listContainer.appendChild(li);
+        channelListEl.appendChild(li);
       });
+
+      displayedCount += nextBatch.length;
     }
 
-    // Stream Player Setup via Proxy
+    // Scroll listener for Infinite Scrolling
+    function handleScroll() {
+      if (channelListEl.scrollTop + channelListEl.clientHeight >= channelListEl.scrollHeight - 200) {
+        if (displayedCount < currentFilteredChannels.length) {
+          renderNextBatch(false);
+        }
+      }
+    }
+
+    // Search Filter
+    function onSearchChange() {
+      const query = document.getElementById('search-input').value.toLowerCase();
+      currentFilteredChannels = allChannels.filter(ch => ch.name.toLowerCase().includes(query));
+      renderNextBatch(true);
+    }
+
+    // Stream Player
     function playStream(url, element) {
       document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
       if (element) element.classList.add('active');
 
-      // Append target URL to Worker Proxy
       const proxiedStreamUrl = PROXY + encodeURIComponent(url);
 
       if (Hls.isSupported()) {
@@ -201,17 +282,9 @@
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Native Safari HLS Support
         video.src = proxiedStreamUrl;
         video.play();
       }
-    }
-
-    // Channel Search Filter
-    function filterChannels() {
-      const query = document.getElementById('search-input').value.toLowerCase();
-      const filtered = channels.filter(ch => ch.name.toLowerCase().includes(query));
-      renderChannels(filtered);
     }
 
     // Initialize
