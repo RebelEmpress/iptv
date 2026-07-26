@@ -36,6 +36,26 @@
       flex-direction: column;
       gap: 10px;
     }
+    #file-input {
+      width: 100%;
+      padding: 8px;
+      background: #0f0f12;
+      border: 1px solid #33333d;
+      border-radius: 8px;
+      color: #aaa;
+      font-size: 13px;
+      outline: none;
+      cursor: pointer;
+    }
+    #file-input::-webkit-file-upload-button {
+      background: #007acc;
+      border: none;
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 8px;
+    }
     #search-input {
       width: 100%;
       padding: 10px 14px;
@@ -172,6 +192,7 @@
 
   <div id="sidebar">
     <div id="search-box">
+      <input type="file" id="file-input" accept=".m3u, .m3u8" onchange="handleFileUpload(event)" />
       <input type="text" id="search-input" placeholder="Search channels..." oninput="filterChannels()" />
       <div class="tabs">
         <button class="tab-btn active" onclick="setCountryFilter('ALL', this)">ALL</button>
@@ -184,19 +205,12 @@
   </div>
 
   <div id="player-container">
-    <div id="loading">Loading USA, UK & Japan channels...</div>
+    <div id="loading">Upload an M3U file to load channels</div>
     <video id="video" controls autoplay></video>
   </div>
 
   <script>
     const PROXY_BASE = 'https://iptv-cors-proxy.minhqdr4n5.workers.dev/?url=';
-    
-    // Country-specific M3U sources
-    const PLAYLISTS = [
-      { code: 'US', name: 'USA', url: 'https://iptv-org.github.io/iptv/countries/us.m3u' },
-      { code: 'UK', name: 'UK', url: 'https://iptv-org.github.io/iptv/countries/uk.m3u' },
-      { code: 'JP', name: 'Japan', url: 'https://iptv-org.github.io/iptv/countries/jp.m3u' }
-    ];
     
     let allChannels = [];
     let currentFilteredChannels = [];
@@ -209,29 +223,37 @@
     const channelListEl = document.getElementById('channel-list');
     let hls = null;
 
-    // Fetch and combine country playlists
-    async function loadPlaylists() {
-      try {
-        const fetchPromises = PLAYLISTS.map(async (pl) => {
-          const proxiedUrl = PROXY_BASE + encodeURIComponent(pl.url);
-          const res = await fetch(proxiedUrl);
-          const text = await res.text();
-          return parseM3U(text, pl.code, pl.name);
-        });
+    // Read the uploaded file locally
+    function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
 
-        const results = await Promise.all(fetchPromises);
-        allChannels = results.flat();
+      loading.innerText = 'Reading file...';
+      loading.style.display = 'block';
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        const text = e.target.result;
+        allChannels = parseM3U(text);
         
         loading.style.display = 'none';
+        if (allChannels.length === 0) {
+          loading.innerText = 'No valid channels found in file.';
+          loading.style.display = 'block';
+        }
         filterChannels();
-      } catch (error) {
-        loading.innerText = 'Failed to load channels.';
-        console.error(error);
-      }
+      };
+
+      reader.onerror = function () {
+        loading.innerText = 'Failed to read playlist file.';
+        console.error(reader.error);
+      };
+
+      reader.readAsText(file);
     }
 
-    // Parse M3U
-    function parseM3U(m3uText, countryCode, countryName) {
+    // Parse M3U with metadata extraction
+    function parseM3U(m3uText) {
       const lines = m3uText.split('\n');
       const parsedChannels = [];
       let currentChannel = null;
@@ -250,6 +272,19 @@
 
           const logoMatch = line.match(/tvg-logo="([^"]+)"/);
           const logo = logoMatch ? logoMatch[1] : '';
+
+          const countryMatch = line.match(/tvg-country="([^"]+)"/);
+          let countryCode = countryMatch ? countryMatch[1].toUpperCase() : 'TV';
+
+          // Detect common country codes or fallback to playlist metadata
+          if (line.includes('group-title="USA"') || line.includes('tvg-country="US"')) countryCode = 'US';
+          else if (line.includes('group-title="UK"') || line.includes('tvg-country="GB"')) countryCode = 'UK';
+          else if (line.includes('group-title="Japan"') || line.includes('tvg-country="JP"')) countryCode = 'JP';
+
+          let countryName = countryCode;
+          if (countryCode === 'US') countryName = 'USA';
+          else if (countryCode === 'UK' || countryCode === 'GB') countryName = 'UK';
+          else if (countryCode === 'JP') countryName = 'Japan';
 
           currentChannel = { name, logo, countryCode, countryName };
         } else if (line && !line.startsWith('#')) {
@@ -409,8 +444,6 @@
         loading.style.display = 'none';
       }
     }
-
-    loadPlaylists();
   </script>
 </body>
 </html>
